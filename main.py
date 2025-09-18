@@ -95,7 +95,7 @@ user_data = {}
 
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 intents = discord.Intents.default()
-intents.messages = True
+intents.message_content = True
 
 bot = commands.Bot(command_prefix='/', intents=intents)
 
@@ -108,6 +108,15 @@ async def on_ready():
         print(f"Synced {len(synced)} slash commands")
     except Exception as e:
         print(f"Failed to sync commands: {e}")
+
+@bot.tree.command(name='sync', description='Sync slash commands to this server')
+async def sync_commands(interaction: discord.Interaction):
+    """Sync slash commands to this server"""
+    try:
+        synced = await bot.tree.sync()
+        await interaction.response.send_message(f"✅ Synced {len(synced)} slash commands to this server!")
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Failed to sync commands: {e}")
 
 def get_berry_image_url(berry_name):
     """Generate Serebii.net image URL for a berry"""
