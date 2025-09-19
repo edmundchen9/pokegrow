@@ -285,14 +285,12 @@ async def inventory_command(interaction: discord.Interaction):
         embeds = []
         for berry_name, count in berry_counts.items():
             berry_data = BERRIES[berry_name]
-            berry_image_url = get_berry_image_url(berry_name)
             
             embed = discord.Embed(
                 title=f"{berry_name}",
                 description=f"**Quantity:** x{count}\n**Rarity:** {berry_data['rarity'].title()}\n**Effect:** {berry_data['effect']}",
                 color=0x00ff00
             )
-            embed.set_thumbnail(url=berry_image_url)
             embeds.append(embed)
         
         await interaction.response.send_message(embeds=embeds)
