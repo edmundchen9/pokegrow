@@ -96,8 +96,39 @@ RARITY_WEIGHTS = {
     "legendary": 1
 }
 
-# User data storage (in a real bot, you'd use a database)
+# User data storage - JSON file for persistence
+DATA_FILE = "user_data.json"
 user_data = {}
+
+def load_user_data():
+    """Load user data from JSON file"""
+    global user_data
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                user_data = json.load(f)
+            print(f"✅ Loaded data for {len(user_data)} users")
+        else:
+            user_data = {}
+            print("📝 No existing data file found, starting fresh")
+    except Exception as e:
+        print(f"❌ Error loading user data: {e}")
+        user_data = {}
+
+def save_user_data():
+    """Save user data to JSON file"""
+    try:
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(user_data, f, indent=2, ensure_ascii=False, default=str)
+        print("💾 User data saved successfully")
+    except Exception as e:
+        print(f"❌ Error saving user data: {e}")
+
+async def auto_save():
+    """Auto-save data every 5 minutes"""
+    while True:
+        await asyncio.sleep(300)  # Wait 5 minutes
+        save_user_data()
 
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 intents = discord.Intents.default()
@@ -110,6 +141,12 @@ async def on_ready():
     print(f"{bot.user.name} is ready!")
     print(f"Bot ID: {bot.user.id}")
     print(f"Connected to {len(bot.guilds)} servers")
+    
+    # Load user data from file
+    load_user_data()
+    
+    # Start auto-save task
+    asyncio.create_task(auto_save())
     
     # Sync slash commands with Discord
     try:
@@ -208,6 +245,9 @@ def claim_daily(user_id):
         user_data[user_id]['inventory'] = []
     user_data[user_id]['inventory'].append(berry)
     
+    # Save data after modification
+    save_user_data()
+    
     return berry
 
 @bot.tree.command(name='daily', description='Claim your daily berry reward!')
@@ -265,8 +305,8 @@ async def daily_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name='inventory', description='Check your berry inventory')
-async def inventory_command(interaction: discord.Interaction):
-    """Check your berry inventory"""
+async def inventory_command(interaction: discord.Interaction, page: int = 1):
+    """Check your berry inventory with pagination"""
     user_id = str(interaction.user.id)
     
     if user_id not in user_data or not user_data[user_id].get('inventory'):
@@ -280,49 +320,74 @@ async def inventory_command(interaction: discord.Interaction):
     for berry in inventory:
         berry_counts[berry] = berry_counts.get(berry, 0) + 1
     
-    # If user has only a few berries, show detailed embeds with images
-    if len(berry_counts) <= 5:
-        embeds = []
-        for berry_name, count in berry_counts.items():
-            berry_data = BERRIES[berry_name]
-            
-            embed = discord.Embed(
-                title=f"{berry_name}",
-                description=f"**Quantity:** x{count}\n**Rarity:** {berry_data['rarity'].title()}\n**Effect:** {berry_data['effect']}",
-                color=0x00ff00
-            )
-            embeds.append(embed)
-        
-        await interaction.response.send_message(embeds=embeds)
+    # Convert to list and sort by rarity (legendary first, then rare, etc.)
+    rarity_order = {"legendary": 0, "rare": 1, "uncommon": 2, "common": 3}
+    berry_items = sorted(berry_counts.items(), key=lambda x: rarity_order.get(BERRIES[x[0]]['rarity'], 4))
+    
+    # Pagination settings
+    items_per_page = 15
+    total_pages = (len(berry_items) + items_per_page - 1) // items_per_page
+    
+    # Validate page number
+    if page < 1 or page > total_pages:
+        await interaction.response.send_message(f"❌ Invalid page number! Please use a page between 1 and {total_pages}.", ephemeral=True)
         return
     
-    # For larger inventories, show compact list with first berry as main image
+    # Get items for current page
+    start_idx = (page - 1) * items_per_page
+    end_idx = start_idx + items_per_page
+    page_items = berry_items[start_idx:end_idx]
+    
+    # Create embed
     embed = discord.Embed(
         title=f"📦 {interaction.user.display_name}'s Berry Inventory",
-        description=f"Total berries: {len(inventory)}",
+        description=f"Total berries: {len(inventory)} | Page {page}/{total_pages}",
         color=0x00ff00
     )
     
-    # Set the first berry as the main image
-    first_berry = list(berry_counts.keys())[0]
-    first_berry_image = get_berry_image_url(first_berry)
-    embed.set_thumbnail(url=first_berry_image)
+    # Set thumbnail (first berry from current page)
+    if page_items:
+        first_berry_image = get_berry_image_url(page_items[0][0])
+        embed.set_thumbnail(url=first_berry_image)
     
-    # Add berries to embed (limit to 25 fields due to Discord limits)
-    for i, (berry_name, count) in enumerate(list(berry_counts.items())[:25]):
-        berry_data = BERRIES[berry_name]
-        embed.add_field(
-            name=f"{berry_name}",
-            value=f"x{count} - {berry_data['rarity'].title()}",
-            inline=True
-        )
+    # Create true 3-column grid
+    items_per_row = 3
+    rows_on_page = (len(page_items) + items_per_row - 1) // items_per_row
     
-    if len(berry_counts) > 25:
-        embed.add_field(
-            name="...",
-            value=f"and {len(berry_counts) - 25} more berries",
-            inline=False
-        )
+    for row in range(rows_on_page):
+        row_items = page_items[row * items_per_row:(row + 1) * items_per_row]
+        
+        # Create three columns for this row
+        col1_value = ""
+        col2_value = ""
+        col3_value = ""
+        
+        for i, (berry_name, count) in enumerate(row_items):
+            berry_data = BERRIES[berry_name]
+            rarity_emoji = {
+                "common": "⚪",
+                "uncommon": "🟢", 
+                "rare": "🔵",
+                "legendary": "🟡"
+            }.get(berry_data['rarity'], "⚪")
+            
+            berry_text = f"{rarity_emoji} **{berry_name}**\nx{count}"
+            
+            if i == 0:
+                col1_value = berry_text
+            elif i == 1:
+                col2_value = berry_text
+            elif i == 2:
+                col3_value = berry_text
+        
+        # Add the three columns as inline fields
+        embed.add_field(name="", value=col1_value or "⠀", inline=True)
+        embed.add_field(name="", value=col2_value or "⠀", inline=True)
+        embed.add_field(name="", value=col3_value or "⠀", inline=True)
+    
+    # Add pagination info
+    if total_pages > 1:
+        embed.set_footer(text=f"Use /inventory <page> to navigate | Page {page}/{total_pages}")
     
     await interaction.response.send_message(embed=embed)
 
@@ -409,6 +474,9 @@ async def drop_command(interaction: discord.Interaction):
     # Add item to inventory
     user_data[user_id]['inventory'].append(spawned_item)
     
+    # Save data after modification
+    save_user_data()
+    
     # Create embed for spawn notification
     embed = discord.Embed(
         title=embed_title,
@@ -447,6 +515,20 @@ async def drop_command(interaction: discord.Interaction):
     # embed.set_footer(text="⏰ Next spawn available in 10 minutes")
     
     await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name='save', description='Manually save all user data (Admin only)')
+async def save_command(interaction: discord.Interaction):
+    """Manually save all user data"""
+    # Check if user has administrator permissions
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need Administrator permissions to use this command!", ephemeral=True)
+        return
+    
+    try:
+        save_user_data()
+        await interaction.response.send_message("✅ User data saved successfully!", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error saving data: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name='debug', description='Debug information about the bot')
 async def debug_command(interaction: discord.Interaction):
